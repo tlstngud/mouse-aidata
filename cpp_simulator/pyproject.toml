@@ -1,0 +1,9 @@
+[build-system]
+requires = ["setuptools>=61.0", "pybind11>=2.10"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cpp_simulator"
+version = "1.0.0"
+description = "C++ Game Simulator Extension for GRPO Training"
+requires-python = ">=3.8"

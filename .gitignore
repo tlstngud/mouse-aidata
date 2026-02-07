@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+*.so
+
+# C++ build artifacts
+cpp_simulator/build/
+cpp_simulator/src/*.so
+cpp_simulator/src/*.egg-info/
+
+# Generated data
+sft_data/
+*.pkl
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
