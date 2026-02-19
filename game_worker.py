@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-Game parallel worker (no torch, CPU only)
-Used with multiprocessing spawn mode
+게임 병렬 실행 워커 (torch 없음, CPU only)
+multiprocessing spawn 모드에서 사용
 """
 
 import os
 import sys
 import random
 
-# Add project root to path
-PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, PROJECT_ROOT)
+# 경로 설정
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # pygame headless
 os.environ['SDL_VIDEODRIVER'] = 'dummy'
@@ -18,7 +17,7 @@ os.environ['SDL_AUDIODRIVER'] = 'dummy'
 
 
 def get_effective_length(program):
-    """Calculate effective length of a program"""
+    """프로그램의 효율적 길이 계산"""
     LOOP_TOKEN = 110
     END_TOKEN = 112
     effective_len = 0.0
@@ -37,7 +36,7 @@ def get_effective_length(program):
 
 
 def get_state_vector_list(sim):
-    """Extract state vector from simulator (828 dims, returns list - no torch needed)"""
+    """시뮬레이터에서 상태 벡터 추출 (828차원, list 반환 - torch 불필요)"""
     state_dict = sim.get_state_dict()
     state = []
     DYNAMIC_SCALE = 10.0
@@ -86,7 +85,7 @@ def get_state_vector_list(sim):
 
 
 def generate_running_max_standalone(n_programs, game_state_dict, cpp_threads):
-    """Generate Running Max programs (standalone)"""
+    """Running Max 프로그램 생성 (standalone)"""
     from cpp_simulator_adapter import LightweightGameSimulator
     import cpp_simulator as cpp_sim
 
@@ -155,7 +154,7 @@ def generate_running_max_standalone(n_programs, game_state_dict, cpp_threads):
 
 
 def evaluate_programs_standalone(programs, game_state_dict, cpp_threads):
-    """Evaluate programs (standalone) - returns total_score"""
+    """프로그램 평가 (standalone) - total_score 반환"""
     import cpp_simulator as cpp_sim
     from reward_config import RewardConfig, compute_structure_reward
 
@@ -225,8 +224,12 @@ def evaluate_programs_standalone(programs, game_state_dict, cpp_threads):
 
 
 def game_worker(worker_args):
-    """Multiprocessing worker: run a single complete game (CPU only, no torch)"""
-    game_idx, level, max_runs, cpp_threads, top_k_sft = worker_args
+    """멀티프로세싱 워커: 단일 게임 완전 실행 (CPU only, torch 없음)"""
+    if len(worker_args) == 6:
+        game_idx, level, max_runs, cpp_threads, top_k_sft, group_size = worker_args
+    else:
+        game_idx, level, max_runs, cpp_threads, top_k_sft = worker_args
+        group_size = 32
 
     from cpp_simulator_adapter import LightweightGameSimulator
 
@@ -242,7 +245,7 @@ def game_worker(worker_args):
         state_vec = get_state_vector_list(game)
         game_state_dict = game.get_state_dict()
 
-        programs = generate_running_max_standalone(32, game_state_dict, cpp_threads)
+        programs = generate_running_max_standalone(group_size, game_state_dict, cpp_threads)
         eval_results = evaluate_programs_standalone(programs, game_state_dict, cpp_threads)
 
         best_idx = max(range(len(eval_results)),

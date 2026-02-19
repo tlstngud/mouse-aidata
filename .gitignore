@@ -16,6 +16,7 @@ cpp_simulator/src/*.egg-info/
 # Generated data
 sft_data/
 *.pkl
+*.pt
 
 # IDE
 .vscode/

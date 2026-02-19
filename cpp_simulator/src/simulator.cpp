@@ -513,12 +513,163 @@ bool Simulator::check_crossing(const Position& p1, const Position& p1_last,
 }
 
 // ============================================================
-// 시뮬레이션 (Python simulate_program과 동일)
+// Pre-calculate cat actions (exe3.py _get_cats_direct_actions0 - FLEE mode)
+// ============================================================
+std::array<std::vector<int>, Config::NUM_CATS> Simulator::pre_calculate_cat_actions(
+    const std::vector<int>& mouse_actions, const GameState& sim_state)
+{
+    std::array<std::vector<int>, Config::NUM_CATS> cat_actions;
+
+    // Virtual state for pre-calculation
+    std::array<Position, Config::NUM_CATS> virtual_cats;
+    std::array<int, Config::NUM_CATS> virtual_dirs;
+
+    for (int i = 0; i < Config::NUM_CATS; i++) {
+        virtual_cats[i] = sim_state.cats[i].pos;
+        virtual_dirs[i] = sim_state.cats[i].direction;
+    }
+
+    int n_steps = static_cast<int>(mouse_actions.size());
+
+    // RANDOM mode (exe3.py _get_cats_direct_actions): no flee, no mouse tracking
+    for (int step = 0; step < n_steps; step++) {
+        for (int i = 0; i < Config::NUM_CATS; i++) {
+            Position& cat_pos = virtual_cats[i];
+            int& cat_dir = virtual_dirs[i];
+
+            // Junction: random direction (no turning back)
+            if (sim_state.junc[cat_pos.x][cat_pos.y]) {
+                bool found = false;
+                for (int tries = 0; tries < Config::MAX_RANDOM_TRIES; tries++) {
+                    std::uniform_int_distribution<> dist(0, Direction::COUNT - 1);
+                    int new_dir = dist(rng_);
+                    if (new_dir == Direction::OPPOSITE[cat_dir]) continue;
+                    Position next = cat_pos.move(new_dir);
+                    if (next.is_valid() && !sim_state.wall[next.x][next.y]) {
+                        cat_pos = next;
+                        cat_dir = new_dir;
+                        cat_actions[i].push_back(new_dir);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    cat_actions[i].push_back(cat_dir >= 0 && cat_dir < Direction::COUNT ? cat_dir : 0);
+                }
+            }
+            // Continue in current direction
+            else if (movable(cat_pos, cat_dir)) {
+                cat_pos = move_pos(cat_pos, cat_dir);
+                cat_actions[i].push_back(cat_dir);
+            }
+            // Blocked: random direction
+            else {
+                bool found = false;
+                for (int tries = 0; tries < Config::MAX_RANDOM_TRIES; tries++) {
+                    std::uniform_int_distribution<> dist(0, Direction::COUNT - 1);
+                    int new_dir = dist(rng_);
+                    Position next = cat_pos.move(new_dir);
+                    if (next.is_valid() && !sim_state.wall[next.x][next.y]) {
+                        cat_pos = next;
+                        cat_dir = new_dir;
+                        cat_actions[i].push_back(new_dir);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    cat_actions[i].push_back(cat_dir >= 0 && cat_dir < Direction::COUNT ? cat_dir : 0);
+                }
+            }
+        }
+    }
+
+    return cat_actions;
+}
+
+// ============================================================
+// Pre-calculate crzbc actions (exe3.py _get_crzbc_actions matching)
+// ============================================================
+std::array<std::vector<int>, Config::NUM_CRZBC> Simulator::pre_calculate_crzbc_actions(
+    int n_moves, const GameState& sim_state)
+{
+    std::array<std::vector<int>, Config::NUM_CRZBC> crzbc_actions;
+
+    std::array<Position, Config::NUM_CRZBC> virtual_crzbc;
+    std::array<int, Config::NUM_CRZBC> virtual_dirs;
+
+    for (int i = 0; i < Config::NUM_CRZBC; i++) {
+        virtual_crzbc[i] = sim_state.crzbc[i].pos;
+        virtual_dirs[i] = sim_state.crzbc[i].direction;
+    }
+
+    for (int step = 0; step < n_moves; step++) {
+        for (int i = 0; i < Config::NUM_CRZBC; i++) {
+            if (!sim_state.crzbc[i].active) continue;
+
+            Position& pos = virtual_crzbc[i];
+            int& dir = virtual_dirs[i];
+
+            if (!pos.is_valid()) continue;
+
+            // Junction: random (no turning back)
+            if (sim_state.junc[pos.x][pos.y]) {
+                bool found = false;
+                for (int tries = 0; tries < Config::MAX_RANDOM_TRIES; tries++) {
+                    std::uniform_int_distribution<> dist(0, Direction::COUNT - 1);
+                    int new_dir = dist(rng_);
+                    if (new_dir == Direction::OPPOSITE[dir]) continue;
+                    Position next = pos.move(new_dir);
+                    if (next.is_valid() && !sim_state.wall[next.x][next.y]) {
+                        pos = next;
+                        dir = new_dir;
+                        crzbc_actions[i].push_back(new_dir);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    crzbc_actions[i].push_back(dir >= 0 && dir < Direction::COUNT ? dir : 0);
+                }
+            }
+            // Continue in current direction
+            else if (movable(pos, dir)) {
+                pos = move_pos(pos, dir);
+                crzbc_actions[i].push_back(dir);
+            }
+            // Random direction
+            else {
+                bool found = false;
+                for (int tries = 0; tries < Config::MAX_RANDOM_TRIES; tries++) {
+                    std::uniform_int_distribution<> dist(0, Direction::COUNT - 1);
+                    int new_dir = dist(rng_);
+                    Position next = pos.move(new_dir);
+                    if (next.is_valid() && !sim_state.wall[next.x][next.y]) {
+                        pos = next;
+                        dir = new_dir;
+                        crzbc_actions[i].push_back(new_dir);
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    crzbc_actions[i].push_back(dir >= 0 && dir < Direction::COUNT ? dir : 0);
+                }
+            }
+        }
+    }
+
+    return crzbc_actions;
+}
+
+// ============================================================
+// 시뮬레이션 (exe3.py running_op 매칭)
 // ============================================================
 float Simulator::simulate_program(const std::vector<int>& program) {
     // 가상 상태 복사
     GameState sim_state = state_;
-    int virtual_score = state_.score;  // 절대 점수 반환 (Python과 동일)
+    int virtual_score = state_.score;
+    int virtual_life = state_.life;
 
     // 1. 프로그램 파싱
     ParsedProgram parsed = parse_program(program);
@@ -531,82 +682,144 @@ float Simulator::simulate_program(const std::vector<int>& program) {
     // 상태 재설정 (액션 변환에서 수정됨)
     sim_state = state_;
 
-    // 3. 시뮬레이션 루프
-    for (size_t action_idx = 0; action_idx < action_result.actions.size(); action_idx++) {
-        int action = action_result.actions[action_idx];
+    // command_length: 프로그램 토큰 수 (END 포함, Python len(command) 매칭)
+    int command_length = 0;
+    for (int token : program) {
+        command_length++;
+        if (token == Token::END) break;
+    }
 
-        // 벽 충돌 체크
-        if (action_result.wall_collisions.count(action_idx)) {
+    // 3. Pre-calculate entity actions (exe3.py style)
+    auto cat_actions = pre_calculate_cat_actions(action_result.actions, sim_state);
+    auto crzbc_actions = pre_calculate_crzbc_actions(command_length, sim_state);
+
+    // 4. 시뮬레이션 루프
+    for (size_t itr = 0; itr < action_result.actions.size(); itr++) {
+        int action = action_result.actions[itr];
+
+        // 1. Wall collision
+        if (action_result.wall_collisions.count(itr)) {
             virtual_score += Score::WALL_COLLISION;
         }
 
-        // 마우스 이동 (Python과 동일: 이동 성공 시에만 step 증가)
+        // 2. Mouse moves
         sim_state.mouse_last = sim_state.mouse;
         if (movable(sim_state.mouse, action)) {
             sim_state.mouse = move_pos(sim_state.mouse, action);
-            sim_state.step++;  // 이동 성공 시에만 step 증가
+            sim_state.step++;
         }
 
-        // 거리 맵 생성
-        DistanceMap dist_map = create_distance_map(sim_state.mouse);
+        // 3. Cat1 (naughty) moves every step
+        if (itr < cat_actions[1].size()) {
+            if (movable(sim_state.cats[1].pos, cat_actions[1][itr])) {
+                Position new_pos = move_pos(sim_state.cats[1].pos, cat_actions[1][itr]);
+                // Cat-cat collision prevention
+                if (new_pos != sim_state.cats[0].pos) {
+                    sim_state.cats[1].last_pos = sim_state.cats[1].pos;
+                    sim_state.cats[1].pos = new_pos;
+                }
+            }
+        }
 
-        // 고양이 이동
-        move_cats(sim_state, dist_map);
+        // 4. Cat0 (dummy) moves only for command_length steps
+        if ((int)itr < command_length && itr < cat_actions[0].size()) {
+            if (movable(sim_state.cats[0].pos, cat_actions[0][itr])) {
+                Position new_pos = move_pos(sim_state.cats[0].pos, cat_actions[0][itr]);
+                // Cat-cat collision prevention
+                if (new_pos != sim_state.cats[1].pos) {
+                    sim_state.cats[0].last_pos = sim_state.cats[0].pos;
+                    sim_state.cats[0].pos = new_pos;
+                }
+            }
+        }
 
-        // 빅치즈 이동
-        move_crzbc(sim_state, dist_map);
-        move_movbc(sim_state);
+        // 5. Crzbc moves (pre-calculated, for command_length steps)
+        for (int j = 0; j < Config::NUM_CRZBC; j++) {
+            if (!sim_state.crzbc[j].active) continue;
+            if (itr < crzbc_actions[j].size()) {
+                if (movable(sim_state.crzbc[j].pos, crzbc_actions[j][itr])) {
+                    Position new_pos = move_pos(sim_state.crzbc[j].pos, crzbc_actions[j][itr]);
+                    // Collision check with cats and other crzbc
+                    bool collision = false;
+                    for (int c = 0; c < Config::NUM_CATS; c++) {
+                        if (new_pos == sim_state.cats[c].pos) {
+                            collision = true;
+                            break;
+                        }
+                    }
+                    for (int k = 0; k < Config::NUM_CRZBC; k++) {
+                        if (k != j && sim_state.crzbc[k].active && new_pos == sim_state.crzbc[k].pos) {
+                            collision = true;
+                            break;
+                        }
+                    }
+                    if (!collision) {
+                        sim_state.crzbc[j].pos = new_pos;
+                    }
+                }
+            }
+        }
 
-        // 작은 치즈 수집
+        // 6. Cat collision check AFTER movement (no break - both cats can catch)
+        bool catched = false;
+        for (int ci = 0; ci < Config::NUM_CATS; ci++) {
+            if (!sim_state.cats[ci].active) continue;
+            if (sim_state.mouse == sim_state.cats[ci].pos ||
+                check_crossing(sim_state.mouse, sim_state.mouse_last,
+                               sim_state.cats[ci].pos, sim_state.cats[ci].last_pos)) {
+                virtual_score += Score::CAT_COLLISION;
+                virtual_life--;
+                catched = true;
+                // No break: both cats can catch in same step
+            }
+        }
+
+        // 7. movbc collection (NO movement - stationary)
+        for (auto& bc : sim_state.movbc) {
+            if (!bc.active) continue;
+            if (sim_state.mouse == bc.pos) {
+                bc.active = false;
+                virtual_score += Score::BIG_CHEESE;
+            }
+        }
+
+        // 8. crzbc collection
+        for (auto& bc : sim_state.crzbc) {
+            if (!bc.active) continue;
+            if (sim_state.mouse == bc.pos) {
+                bc.active = false;
+                virtual_score += Score::BIG_CHEESE;
+            }
+        }
+
+        // 9. SC collection
         if (sim_state.sc[sim_state.mouse.x][sim_state.mouse.y]) {
             sim_state.sc[sim_state.mouse.x][sim_state.mouse.y] = 0;
             virtual_score += Score::SMALL_CHEESE;
         }
 
-        // 빅치즈 수집 (movbc)
-        for (auto& bc : sim_state.movbc) {
-            if (!bc.active) continue;
-            if (sim_state.mouse == bc.pos ||
-                check_crossing(sim_state.mouse, sim_state.mouse_last, bc.pos, bc.last_pos)) {
-                bc.active = false;
-                virtual_score += Score::BIG_CHEESE;
-            }
+        // 10. Win/lose check (exe3.py order: life→sc→step)
+        if (virtual_life <= 0) {
+            break;
         }
-
-        // 빅치즈 수집 (crzbc)
-        for (auto& bc : sim_state.crzbc) {
-            if (!bc.active) continue;
-            if (sim_state.mouse == bc.pos ||
-                check_crossing(sim_state.mouse, sim_state.mouse_last, bc.pos, bc.last_pos)) {
-                bc.active = false;
-                virtual_score += Score::BIG_CHEESE;
-            }
+        if (sim_state.count_remaining_cheese() == 0) {
+            sim_state.win_sign = true;
+            int victory_bonus = sim_state.run * 10 + sim_state.step;
+            virtual_score += victory_bonus;
+            break;
         }
-
-        // 고양이 충돌
-        for (const auto& cat : sim_state.cats) {
-            if (!cat.active) continue;
-            if (sim_state.mouse == cat.pos ||
-                check_crossing(sim_state.mouse, sim_state.mouse_last, cat.pos, cat.last_pos)) {
-                virtual_score += Score::CAT_COLLISION;
-                sim_state.catched = true;
-                break;
-            }
-        }
-
-        // 스텝 제한
         if (sim_state.step >= sim_state.step_limit) {
             break;
         }
 
-        // 고양이에게 잡힘
-        if (sim_state.catched) {
+        // 11. Catched: break this run
+        if (catched) {
             break;
         }
     }
 
-    // 승리 체크
-    if (sim_state.count_remaining_cheese() == 0) {
+    // 루프 후 승리 체크 (루프가 정상 종료된 경우)
+    if (!sim_state.win_sign && sim_state.count_remaining_cheese() == 0) {
         sim_state.win_sign = true;
         int victory_bonus = sim_state.run * 10 + sim_state.step;
         virtual_score += victory_bonus;

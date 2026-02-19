@@ -161,6 +161,13 @@ private:
     void move_movbc(GameState& sim_state);
     void move_crzbc(GameState& sim_state, const DistanceMap& dist_map);
 
+    // ========== Pre-calculate entity actions (exe3.py matching) ==========
+
+    std::array<std::vector<int>, Config::NUM_CATS> pre_calculate_cat_actions(
+        const std::vector<int>& mouse_actions, const GameState& sim_state);
+    std::array<std::vector<int>, Config::NUM_CRZBC> pre_calculate_crzbc_actions(
+        int n_moves, const GameState& sim_state);
+
     // ========== 충돌 감지 ==========
 
     // Crossing 감지 (서로 교차)

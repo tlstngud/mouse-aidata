@@ -538,527 +538,408 @@ class LightweightGameSimulator:
 
         return actions, col_wall
 
-    def simulate_program(self, program, function=None):
+    def _get_cats_pre_actions(self, mouse_actions):
         """
-        ✅ 프로그램 실행 시뮬레이션 (parse_and_execute 방식)
+        Pre-calculate cat actions (exe3.py _get_cats_direct_actions - RANDOM mode).
 
-        Args:
-            program: List[int] - 프로그램 (함수 라이브러리 ID 포함 가능)
-            function: List[List[int]] - 함수 2개 [F1, F2] (optional, 지금은 무시됨)
-        Returns:
-            final_score: float - 최종 점수
+        Cats move randomly: at junctions pick random direction (no turning back),
+        on straight paths keep going, if blocked pick any random valid direction.
+        No flee behavior - cats don't track mouse position.
         """
-        # ✅ parse_and_execute 방식으로 파싱
-        # 113-998 → 10/11로 변환, function 배열에 본문 저장
-        command, function = self._parse_program(program)
+        import random
 
-        # ✅ 함수 사용 횟수 카운트 (func_chance 검증)
-        # command에 있는 10, 11 개수 세기
-        func_count = sum(1 for token in command if token in [10, 11])
-        if func_count > self.func_chance:
-            # 함수 제한 초과 → 큰 패널티
-            return -1000.0
+        n_steps = len(mouse_actions) if isinstance(mouse_actions, list) else mouse_actions
+        cats_actions = [[], []]
+        virtual_cats = [cat.copy() for cat in self.cat]
+        virtual_dirs = self.cat_direction.copy()
 
-        # 명령어를 행동으로 변환 (이제 10, 11이 function 배열 참조)
-        mouse_actions, col_wall = self._get_mouse_actions(command, function)
-
-        # ✅ 시뮬레이션 실행 (Accurate game mechanics)
-        initial_score = self.score
-        # ✅ Phase 1: deepcopy → list comprehension (10배 빠름!)
-        virtual_mouse = self.mouse.copy()
-        virtual_mouse_last = self.mouse.copy()  # ✅ Crossing 감지용
-        virtual_sc = [row.copy() if isinstance(row, list) else list(row) for row in self.sc]
-        virtual_movbc = [item.copy() if isinstance(item, list) else list(item) for item in self.movbc]
-        virtual_crzbc = [item.copy() if isinstance(item, list) else list(item) for item in self.crzbc]
-        virtual_cats = [cat.copy() if isinstance(cat, list) else list(cat) for cat in self.cat]
-        virtual_cat_dirs = self.cat_direction.copy() if isinstance(self.cat_direction, list) else list(self.cat_direction)
-        virtual_step = self.step
-        virtual_score = initial_score  # ✅ Virtual score (don't modify self.score!)
-
-        # ✅ Cat movement simulation (exe3.py:2200-2254 red zone algorithm)
-        for itr, action in enumerate(mouse_actions):
-            # 벽 충돌
-            if itr in col_wall:
-                virtual_score -= 10
-
-            # 쥐 이동
-            virtual_mouse_last = virtual_mouse.copy()  # ✅ Crossing 감지용
-            if self._movable(virtual_mouse, action):
-                self.mouse_last_pos = virtual_mouse.copy()
-                virtual_mouse = self._move(virtual_mouse, action)
-                virtual_step += 1
-
-            # ✅ Cat movement (accurate red zone algorithm)
-            distance_map = self._create_distance_map(virtual_mouse)
-
+        for _ in range(n_steps):
             for i, v_cat in enumerate(virtual_cats):
-                distance = distance_map[v_cat[0]][v_cat[1]]
-                deadend = self.deadend[v_cat[0]][v_cat[1]]
-
-                # Red zone: 고양이가 도망감 (거리 <= red_zone)
-                if not deadend and distance <= self.red_zone and distance != -1:
-                    dir_cands = [-1, -1, -1, -1]  # [up, down, left, right]
-                    if v_cat[0] > 0:
-                        dir_cands[0] = distance_map[v_cat[0] - 1][v_cat[1]]
-                    if v_cat[0] < 10:
-                        dir_cands[1] = distance_map[v_cat[0] + 1][v_cat[1]]
-                    if v_cat[1] > 0:
-                        dir_cands[2] = distance_map[v_cat[0]][v_cat[1] - 1]
-                    if v_cat[1] < 10:
-                        dir_cands[3] = distance_map[v_cat[0]][v_cat[1] + 1]
-
-                    # 가장 먼 방향으로 도망
-                    new_direction = dir_cands.index(max(dir_cands))
-                    virtual_cats[i] = self._move(v_cat, new_direction)
-                    virtual_cat_dirs[i] = new_direction
-
-                # Junction: 랜덤 방향 전환
-                elif self.junc[v_cat[0]][v_cat[1]]:
-                    import random
+                if self.junc[v_cat[0]][v_cat[1]]:
+                    # Junction: random direction (no turning back)
                     attempts = 0
                     found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
+                    while attempts < 100:
                         attempts += 1
                         new_direction = random.randrange(0, 4)
-                        # 뒤로 가지 않기
-                        if virtual_cat_dirs[i] in [5 - new_direction, 1 - new_direction]:
+                        if virtual_dirs[i] in [5 - new_direction, 1 - new_direction]:
                             continue
                         elif self._movable(v_cat, new_direction):
                             virtual_cats[i] = self._move(v_cat, new_direction)
-                            virtual_cat_dirs[i] = new_direction
+                            virtual_dirs[i] = new_direction
+                            cats_actions[i].append(new_direction)
                             found = True
                             break
                     if not found:
-                        pass  # 마지막 방향 유지
+                        cats_actions[i].append(virtual_dirs[i] if virtual_dirs[i] in range(4) else 0)
 
-                # 같은 방향 유지
-                elif self._movable(v_cat, virtual_cat_dirs[i]):
-                    virtual_cats[i] = self._move(v_cat, virtual_cat_dirs[i])
+                elif self._movable(v_cat, virtual_dirs[i]):
+                    # Straight: keep going
+                    virtual_cats[i] = self._move(v_cat, virtual_dirs[i])
+                    cats_actions[i].append(virtual_dirs[i])
 
-                # 막혔으면 랜덤
                 else:
-                    import random
+                    # Blocked: pick any random valid direction
                     attempts = 0
                     found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
+                    while attempts < 100:
                         attempts += 1
                         new_direction = random.randrange(0, 4)
                         if self._movable(v_cat, new_direction):
                             virtual_cats[i] = self._move(v_cat, new_direction)
-                            virtual_cat_dirs[i] = new_direction
+                            virtual_dirs[i] = new_direction
+                            cats_actions[i].append(new_direction)
                             found = True
                             break
                     if not found:
-                        pass  # 마지막 방향 유지
+                        cats_actions[i].append(virtual_dirs[i] if virtual_dirs[i] in range(4) else 0)
 
-            # ✅ Moving big cheese (crzbc) movement (exe3.py:2256-2294와 동일)
-            virtual_crzbc_dirs = self.crzbc_direction.copy() if hasattr(self, 'crzbc_direction') else []  # ✅ Phase 1: deepcopy → copy()
-            # ✅ Crossing 감지용 last position 저장
-            virtual_crzbc_last = [pos.copy() if pos != [-1, -1] else [-1, -1] for pos in virtual_crzbc]
+        return cats_actions
 
+    def _get_crzbc_pre_actions(self, n_moves):
+        """
+        Pre-calculate crzbc actions (exe3.py _get_crzbc_actions).
+
+        CrzBC movement pre-calculated for n_moves steps (= len(command)).
+        Junction: random (no turning back), otherwise continue same direction.
+        """
+        import random
+
+        n_crzbc = len(self.crzbc)
+        if n_crzbc == 0:
+            return []
+
+        crzbc_actions = [[] for _ in range(n_crzbc)]
+        virtual_crzbc = [pos.copy() for pos in self.crzbc]
+        virtual_dirs = self.crzbc_direction.copy() if hasattr(self, 'crzbc_direction') else [0] * n_crzbc
+
+        for _ in range(n_moves):
             for i, v_crzbc in enumerate(virtual_crzbc):
-                # 유효하지 않은 위치면 스킵
-                if v_crzbc[0] < 0 or v_crzbc[0] > 10 or v_crzbc[1] < 0 or v_crzbc[1] > 10:
-                    continue
-                if v_crzbc == [-1, -1]:  # 이미 먹힌 치즈
+                if not (0 <= v_crzbc[0] <= 10 and 0 <= v_crzbc[1] <= 10):
                     continue
 
-                # Junction: 랜덤 방향 전환
                 if self.junc[v_crzbc[0]][v_crzbc[1]]:
-                    import random
                     attempts = 0
                     found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
+                    while attempts < 100:
                         attempts += 1
                         new_direction = random.randrange(0, 4)
-                        # 뒤로 가지 않기
-                        if i < len(virtual_crzbc_dirs):
-                            if virtual_crzbc_dirs[i] in [5 - new_direction, 1 - new_direction]:
-                                continue
-                        if self._movable(v_crzbc, new_direction):
+                        if i < len(virtual_dirs) and virtual_dirs[i] in [5 - new_direction, 1 - new_direction]:
+                            continue
+                        elif self._movable(v_crzbc, new_direction):
                             virtual_crzbc[i] = self._move(v_crzbc, new_direction)
-                            if i < len(virtual_crzbc_dirs):
-                                virtual_crzbc_dirs[i] = new_direction
+                            if i < len(virtual_dirs):
+                                virtual_dirs[i] = new_direction
+                            crzbc_actions[i].append(new_direction)
                             found = True
                             break
                     if not found:
-                        pass  # 마지막 방향 유지
+                        crzbc_actions[i].append(virtual_dirs[i] if i < len(virtual_dirs) and virtual_dirs[i] in range(4) else 0)
 
-                # 같은 방향 유지
-                elif i < len(virtual_crzbc_dirs) and self._movable(v_crzbc, virtual_crzbc_dirs[i]):
-                    virtual_crzbc[i] = self._move(v_crzbc, virtual_crzbc_dirs[i])
+                elif i < len(virtual_dirs) and self._movable(v_crzbc, virtual_dirs[i]):
+                    virtual_crzbc[i] = self._move(v_crzbc, virtual_dirs[i])
+                    crzbc_actions[i].append(virtual_dirs[i])
 
-                # 막혔으면 랜덤
                 else:
-                    import random
                     attempts = 0
                     found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
+                    while attempts < 100:
                         attempts += 1
                         new_direction = random.randrange(0, 4)
                         if self._movable(v_crzbc, new_direction):
                             virtual_crzbc[i] = self._move(v_crzbc, new_direction)
-                            if i < len(virtual_crzbc_dirs):
-                                virtual_crzbc_dirs[i] = new_direction
+                            if i < len(virtual_dirs):
+                                virtual_dirs[i] = new_direction
+                            crzbc_actions[i].append(new_direction)
                             found = True
                             break
                     if not found:
-                        pass  # 마지막 방향 유지
+                        crzbc_actions[i].append(virtual_dirs[i] if i < len(virtual_dirs) and virtual_dirs[i] in range(4) else 0)
 
-            # ✅ movbc 이동 (exe3.py:2418-2437) - movbc도 랜덤 이동!
-            virtual_movbc_last = [pos.copy() if pos != [-1, -1] else [-1, -1] for pos in virtual_movbc]
-            for i, v_movbc in enumerate(virtual_movbc):
-                if v_movbc == [-1, -1]:
+        return crzbc_actions
+
+    def simulate_program(self, program, function=None):
+        """
+        프로그램 실행 시뮬레이션 (evaluation only, virtual state)
+        ✅ exe3.py running_op과 동일한 동작:
+        - Pre-calculated cat/crzbc actions
+        - Cat0 (dummy): len(command) steps, Cat1 (naughty): every step
+        - Collision check AFTER cat movement
+        - movbc: no movement (collection only)
+        - Cat-cat collision prevention at execution time
+        """
+        import random
+
+        command, function = self._parse_program(program)
+
+        func_count = sum(1 for token in command if token in [10, 11])
+        if func_count > self.func_chance:
+            return -1000.0
+
+        mouse_actions, col_wall = self._get_mouse_actions(command, function)
+
+        initial_score = self.score
+        virtual_mouse = self.mouse.copy()
+        virtual_mouse_last = self.mouse.copy()
+        virtual_sc = [row.copy() for row in self.sc]
+        virtual_movbc = [item.copy() for item in self.movbc]
+        virtual_crzbc = [item.copy() for item in self.crzbc]
+        virtual_cats = [cat.copy() for cat in self.cat]
+        virtual_cat_last = [cat.copy() for cat in self.cat]
+        virtual_step = self.step
+        virtual_score = initial_score
+        virtual_life = self.life
+
+        # Pre-calculate entity actions (exe3.py style)
+        cat_actions = self._get_cats_pre_actions(mouse_actions)
+        crzbc_actions = self._get_crzbc_pre_actions(len(command))
+
+        for itr in range(len(mouse_actions)):
+            # 1. Wall collision
+            if itr in col_wall:
+                virtual_score -= 10
+
+            # 2. Mouse moves
+            virtual_mouse_last = virtual_mouse.copy()
+            if self._movable(virtual_mouse, mouse_actions[itr]):
+                virtual_mouse = self._move(virtual_mouse, mouse_actions[itr])
+                virtual_step += 1
+
+            # 3. Cat1 (naughty) moves every step
+            if len(cat_actions) > 1 and itr < len(cat_actions[1]):
+                if self._movable(virtual_cats[1], cat_actions[1][itr]):
+                    new_pos = self._move(virtual_cats[1], cat_actions[1][itr])
+                    if new_pos != virtual_cats[0]:
+                        virtual_cat_last[1] = virtual_cats[1].copy()
+                        virtual_cats[1] = new_pos
+
+            # 4. Cat0 (dummy) moves only for len(command) steps
+            if itr < len(command) and len(cat_actions) > 0 and itr < len(cat_actions[0]):
+                if self._movable(virtual_cats[0], cat_actions[0][itr]):
+                    new_pos = self._move(virtual_cats[0], cat_actions[0][itr])
+                    if new_pos != virtual_cats[1]:
+                        virtual_cat_last[0] = virtual_cats[0].copy()
+                        virtual_cats[0] = new_pos
+
+            # 5. Crzbc moves (pre-calculated, for len(command) steps)
+            for j in range(len(virtual_crzbc)):
+                if j >= len(crzbc_actions):
                     continue
-                # 랜덤 방향 선택
-                import random
-                attempts = 0
-                while attempts < 100:
-                    new_direction = random.randrange(0, 4)
-                    if self._movable(v_movbc, new_direction):
-                        virtual_movbc[i] = self._move(v_movbc, new_direction)
-                        break
-                    attempts += 1
+                if virtual_crzbc[j] == [-1, -1]:
+                    continue
+                if itr < len(crzbc_actions[j]) and self._movable(virtual_crzbc[j], crzbc_actions[j][itr]):
+                    new_pos = self._move(virtual_crzbc[j], crzbc_actions[j][itr])
+                    collision = False
+                    if new_pos in virtual_cats:
+                        collision = True
+                    for k in range(len(virtual_crzbc)):
+                        if k != j and new_pos == virtual_crzbc[k]:
+                            collision = True
+                            break
+                    if not collision:
+                        virtual_crzbc[j] = new_pos
 
-            # ✅ 작은 치즈 먹기 (+10)
+            # 6. Cat collision check AFTER cat movement
+            catched = False
+            for i, cat_pos in enumerate(virtual_cats):
+                if ((cat_pos == virtual_mouse_last and virtual_mouse == virtual_cat_last[i]) or
+                    cat_pos == virtual_mouse):
+                    virtual_score -= 500
+                    virtual_life -= 1
+                    catched = True
+
+            # 7. movbc collection (NO movement)
+            for i, mbc in enumerate(virtual_movbc):
+                if mbc == [-1, -1]:
+                    continue
+                if mbc == virtual_mouse:
+                    virtual_score += 500
+                    virtual_movbc[i] = [-1, -1]
+
+            # 8. crzbc collection
+            for i, bc in enumerate(virtual_crzbc):
+                if bc == [-1, -1]:
+                    continue
+                if bc == virtual_mouse:
+                    virtual_score += 500
+                    virtual_crzbc[i] = [-1, -1]
+
+            # 9. SC collection
             x, y = virtual_mouse
             if virtual_sc[x][y] == 1:
                 virtual_score += 10
                 virtual_sc[x][y] = 0
 
-            # ✅ movbc 수집 (+ Crossing 감지)
-            for i, bc_pos in enumerate(virtual_movbc):
-                if bc_pos == [-1, -1]:
-                    continue
-                if bc_pos == virtual_mouse:
-                    virtual_score += 500
-                    virtual_movbc[i] = [-1, -1]
-                # Crossing 감지
-                elif (bc_pos == virtual_mouse_last and
-                      virtual_mouse == virtual_movbc_last[i]):
-                    virtual_score += 500
-                    virtual_movbc[i] = [-1, -1]
-
-            # ✅ crzbc 수집 (+ Crossing 감지)
-            for i, bc_pos in enumerate(virtual_crzbc):
-                if bc_pos == [-1, -1]:
-                    continue
-                if bc_pos == virtual_mouse:
-                    virtual_score += 500
-                    virtual_crzbc[i] = [-1, -1]
-                # Crossing 감지
-                elif (bc_pos == virtual_mouse_last and
-                      virtual_mouse == virtual_crzbc_last[i]):
-                    virtual_score += 500
-                    virtual_crzbc[i] = [-1, -1]
-
-            # ✅ 고양이 충돌 체크 (-500 penalty)
-            for cat_pos in virtual_cats:
-                if cat_pos == virtual_mouse:
-                    virtual_score -= 500
-                    self.catched = True
-
-            # 스텝 제한 체크
-            if virtual_step >= self.step_limit:
+            # 10. Win/lose check
+            if virtual_life == 0:
+                self.lose_sign = True
+                break
+            elif sum([sum(line) for line in virtual_sc]) == 0:
+                self.win_sign = True
+                victory_bonus = self.run * 10 + virtual_step
+                virtual_score += victory_bonus
+                break
+            elif virtual_step >= self.step_limit:
                 self.lose_sign = True
                 break
 
-        # ✅ 승리 조건: 모든 작은 치즈 먹음
-        if sum([sum(line) for line in virtual_sc]) == 0:
-            self.win_sign = True
-            # ✅ Victory bonus: run × 10 + step (exe3.py:2577)
-            victory_bonus = self.run * 10 + virtual_step
-            virtual_score += victory_bonus
+            # 11. Catched: stop this run
+            if catched:
+                self.catched = True
+                break
 
         return float(virtual_score)
 
     def simulate_program_and_apply(self, program, function=None):
         """
-        ✅ 프로그램 실행 시뮬레이션 + 실제 상태 적용
-
-        simulate_program()과 동일하지만 결과를 실제 상태에 적용합니다.
-        ✅ 완전한 고양이 AI (Red Zone + Junction)
-        ✅ 완전한 crzbc 이동 로직
-        ✅ 리스폰 시스템 (life > 0이면 게임 계속)
+        프로그램 실행 시뮬레이션 + 실제 상태 적용
+        ✅ exe3.py running_op과 동일한 동작:
+        - Pre-calculated cat/crzbc actions
+        - Cat0 (dummy): len(command) steps, Cat1 (naughty): every step
+        - Collision check AFTER cat movement
+        - movbc: stationary (collection only, no movement)
+        - Cat-cat collision prevention at execution time
         """
         import random
 
-        # ✅ parse_and_execute 방식으로 파싱
         command, function = self._parse_program(program)
 
-        # ✅ 함수 사용 횟수 카운트
         func_count = sum(1 for token in command if token in [10, 11])
         if func_count > self.func_chance:
             return -1000.0
 
-        # 명령어를 행동으로 변환
         mouse_actions, col_wall = self._get_mouse_actions(command, function)
 
-        # ✅ command_score 계산 및 적용 (exe3.py:2587-2588)
         self.command_score = self._get_command_score(mouse_actions, command)
         self.score += self.command_score
-
-        # ✅ collision_score 초기화 (매 run 시작 시)
         self.collision_score = 0
 
-        # ✅ 시뮬레이션 실행 (실제 상태에 적용!)
-        initial_score = self.score
+        # ===== PRE-CALCULATE entity actions (exe3.py style) =====
+        cat_actions = self._get_cats_pre_actions(mouse_actions)
+        crzbc_actions = self._get_crzbc_pre_actions(len(command))
 
-        for itr, action in enumerate(mouse_actions):
-            # 벽 충돌
+        # ===== MAIN LOOP (matching exe3.py running_op order) =====
+        for itr in range(len(mouse_actions)):
+            # 1. Wall collision
             if itr in col_wall:
                 self.score -= 10
                 self.collision_score -= 10
 
-            # 쥐 이동
-            if self._movable(self.mouse, action):
+            # 2. Mouse moves
+            if self._movable(self.mouse, mouse_actions[itr]):
                 self.mouse_last_pos = self.mouse.copy()
-                self.mouse = self._move(self.mouse, action)
+                self.mouse = self._move(self.mouse, mouse_actions[itr])
                 self.step += 1
 
-            # ========================================
-            # ✅ 고양이 충돌 체크 (고양이 이동 전에!)
-            # ========================================
-            for cat_pos in self.cat:
-                if self.mouse == cat_pos:
-                    self.catched = True
-                    self.score -= 500
-                    self.collision_score -= 500
-                    self.life -= 1
-                    break
+            # 3. Cat1 (naughty) moves every mouse step
+            if len(cat_actions) > 1 and itr < len(cat_actions[1]):
+                if self._movable(self.cat[1], cat_actions[1][itr]):
+                    new_pos = self._move(self.cat[1], cat_actions[1][itr])
+                    if new_pos != self.cat[0]:  # cat-cat collision prevention
+                        self.cat_last_pos[1] = self.cat[1].copy()
+                        self.cat[1] = new_pos
+                        self.cat_direction[1] = cat_actions[1][itr]
 
-            # 교차 충돌 체크 (쥐와 고양이가 서로 지나침)
+            # 4. Cat0 (dummy) moves only for len(command) steps
+            if itr < len(command) and len(cat_actions) > 0 and itr < len(cat_actions[0]):
+                if self._movable(self.cat[0], cat_actions[0][itr]):
+                    new_pos = self._move(self.cat[0], cat_actions[0][itr])
+                    if new_pos != self.cat[1]:  # cat-cat collision prevention
+                        self.cat_last_pos[0] = self.cat[0].copy()
+                        self.cat[0] = new_pos
+                        self.cat_direction[0] = cat_actions[0][itr]
+
+            # 5. Crzbc moves (pre-calculated, for len(command) steps)
+            for j in range(len(self.crzbc)):
+                if j >= len(crzbc_actions):
+                    continue
+                if self.crzbc[j] == [-1, -1]:
+                    continue
+                if itr < len(crzbc_actions[j]) and self._movable(self.crzbc[j], crzbc_actions[j][itr]):
+                    new_pos = self._move(self.crzbc[j], crzbc_actions[j][itr])
+                    collision = False
+                    if new_pos in self.cat:
+                        collision = True
+                    for k in range(len(self.crzbc)):
+                        if k != j and new_pos == self.crzbc[k]:
+                            collision = True
+                            break
+                    if not collision:
+                        self.crzbc_last_pos[j] = self.crzbc[j].copy()
+                        self.crzbc[j] = new_pos
+                        self.crzbc_direction[j] = crzbc_actions[j][itr]
+
+            # 6. Cat collision check AFTER cat movement (exe3.py style)
+            # Note: no break in this loop - both cats can catch mouse in same step
             for i, cat_pos in enumerate(self.cat):
-                if (cat_pos == self.mouse_last_pos and
-                    self.mouse == self.cat_last_pos[i]):
-                    self.catched = True
-                    self.score -= 500
+                if ((cat_pos == self.mouse_last_pos and self.mouse == self.cat_last_pos[i]) or
+                    cat_pos == self.mouse):
                     self.collision_score -= 500
+                    self.score -= 500
                     self.life -= 1
-                    break
+                    self.catched = True
 
-            if self.catched:
-                # ✅ 리스폰: life > 0이면 게임 계속
-                if self.life > 0:
-                    self._retry_after_catched()
-                    break
-                else:
-                    self.lose_sign = True
-                    break
-
-            # ========================================
-            # ✅ 고양이 이동 (완전한 Red Zone 알고리즘)
-            # ========================================
-            distance_map = self._create_distance_map(self.mouse)
-
-            for i, cat_pos in enumerate(self.cat):
-                distance = distance_map[cat_pos[0]][cat_pos[1]]
-                deadend = self.deadend[cat_pos[0]][cat_pos[1]]
-
-                # Red zone: 고양이가 도망감 (거리 <= red_zone)
-                if not deadend and distance <= self.red_zone and distance != -1:
-                    dir_cands = [-1, -1, -1, -1]  # [up, down, left, right]
-                    if cat_pos[0] > 0:
-                        dir_cands[0] = distance_map[cat_pos[0] - 1][cat_pos[1]]
-                    if cat_pos[0] < 10:
-                        dir_cands[1] = distance_map[cat_pos[0] + 1][cat_pos[1]]
-                    if cat_pos[1] > 0:
-                        dir_cands[2] = distance_map[cat_pos[0]][cat_pos[1] - 1]
-                    if cat_pos[1] < 10:
-                        dir_cands[3] = distance_map[cat_pos[0]][cat_pos[1] + 1]
-
-                    # 가장 먼 방향으로 도망
-                    new_direction = dir_cands.index(max(dir_cands))
-                    if self._movable(cat_pos, new_direction):
-                        self.cat_last_pos[i] = cat_pos.copy()
-                        self.cat[i] = self._move(cat_pos, new_direction)
-                        self.cat_direction[i] = new_direction
-
-                # Junction: 랜덤 방향 전환
-                elif self.junc[cat_pos[0]][cat_pos[1]]:
-                    attempts = 0
-                    found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
-                        attempts += 1
-                        new_direction = random.randrange(0, 4)
-                        # 뒤로 가지 않기
-                        if self.cat_direction[i] in [5 - new_direction, 1 - new_direction]:
-                            continue
-                        elif self._movable(cat_pos, new_direction):
-                            self.cat_last_pos[i] = cat_pos.copy()
-                            self.cat[i] = self._move(cat_pos, new_direction)
-                            self.cat_direction[i] = new_direction
-                            found = True
-                            break
-                    # 실패 시: 마지막 방향 유지 (exe3.py와 동일)
-                    if not found:
-                        pass  # 이동 안함, 방향 유지
-
-                # 같은 방향 유지
-                elif self._movable(cat_pos, self.cat_direction[i]):
-                    self.cat_last_pos[i] = cat_pos.copy()
-                    self.cat[i] = self._move(cat_pos, self.cat_direction[i])
-
-                # 막혔으면 랜덤
-                else:
-                    attempts = 0
-                    found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
-                        attempts += 1
-                        new_direction = random.randrange(0, 4)
-                        if self._movable(cat_pos, new_direction):
-                            self.cat_last_pos[i] = cat_pos.copy()
-                            self.cat[i] = self._move(cat_pos, new_direction)
-                            self.cat_direction[i] = new_direction
-                            found = True
-                            break
-                    # 실패 시: 마지막 방향 유지 (exe3.py와 동일)
-                    if not found:
-                        pass  # 이동 안함, 방향 유지
-
-            # ========================================
-            # ✅ 움직이는 빅치즈(crzbc) 이동
-            # ========================================
-            for i, crzbc_pos in enumerate(self.crzbc):
-                # 유효하지 않은 위치면 스킵
-                if crzbc_pos[0] < 0 or crzbc_pos[0] > 10 or crzbc_pos[1] < 0 or crzbc_pos[1] > 10:
+            # 7. movbc collection (NO movement - movbc is stationary in exe3.py)
+            eat_movbc = []
+            for i in range(len(self.movbc)):
+                if self.movbc[i] == [-1, -1]:
                     continue
-                if crzbc_pos == [-1, -1]:  # 이미 먹힌 치즈
+                if self.mouse == self.movbc[i]:
+                    eat_movbc.append(i)
+                    self.collision_score += 500
+                    self.score += 500
+                elif (self.movbc[i] == self.mouse_last_pos and
+                      self.mouse == self.movbc_last_pos[i]):
+                    eat_movbc.append(i)
+                    self.collision_score += 500
+                    self.score += 500
+            for e in sorted(set(eat_movbc), reverse=True):
+                self.movbc[e] = [-1, -1]
+
+            # 8. crzbc collection (+ Crossing detection)
+            eat_crzbc = []
+            for i in range(len(self.crzbc)):
+                if self.crzbc[i] == [-1, -1]:
                     continue
+                if self.mouse == self.crzbc[i]:
+                    eat_crzbc.append(i)
+                    self.collision_score += 500
+                    self.score += 500
+                elif (self.crzbc[i] == self.mouse_last_pos and
+                      self.mouse == self.crzbc_last_pos[i]):
+                    eat_crzbc.append(i)
+                    self.collision_score += 500
+                    self.score += 500
+            for e in sorted(set(eat_crzbc), reverse=True):
+                self.crzbc[e] = [-1, -1]
 
-                # Junction: 랜덤 방향 전환
-                if self.junc[crzbc_pos[0]][crzbc_pos[1]]:
-                    attempts = 0
-                    found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
-                        attempts += 1
-                        new_direction = random.randrange(0, 4)
-                        # 뒤로 가지 않기
-                        if i < len(self.crzbc_direction):
-                            if self.crzbc_direction[i] in [5 - new_direction, 1 - new_direction]:
-                                continue
-                        if self._movable(crzbc_pos, new_direction):
-                            self.crzbc_last_pos[i] = crzbc_pos.copy()
-                            self.crzbc[i] = self._move(crzbc_pos, new_direction)
-                            if i < len(self.crzbc_direction):
-                                self.crzbc_direction[i] = new_direction
-                            found = True
-                            break
-                    # 실패 시: 마지막 방향 유지 (exe3.py와 동일)
-                    if not found:
-                        pass
+            # 9. SC collection
+            if self.sc[self.mouse[0]][self.mouse[1]] == 1:
+                self.collision_score += 10
+                self.score += 10
+                self.sc[self.mouse[0]][self.mouse[1]] = 0
 
-                # 같은 방향 유지
-                elif i < len(self.crzbc_direction) and self._movable(crzbc_pos, self.crzbc_direction[i]):
-                    self.crzbc_last_pos[i] = crzbc_pos.copy()
-                    self.crzbc[i] = self._move(crzbc_pos, self.crzbc_direction[i])
-
-                # 막혔으면 랜덤
-                else:
-                    attempts = 0
-                    found = False
-                    while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
-                        attempts += 1
-                        new_direction = random.randrange(0, 4)
-                        if self._movable(crzbc_pos, new_direction):
-                            self.crzbc_last_pos[i] = crzbc_pos.copy()
-                            self.crzbc[i] = self._move(crzbc_pos, new_direction)
-                            if i < len(self.crzbc_direction):
-                                self.crzbc_direction[i] = new_direction
-                            found = True
-                            break
-                    # 실패 시: 마지막 방향 유지 (exe3.py와 동일)
-                    if not found:
-                        pass
-
-            # ========================================
-            # ✅ movbc 이동 (exe3.py:2418-2437)
-            # movbc도 매 턴마다 랜덤하게 이동함!
-            # ========================================
-            for i, movbc_pos in enumerate(self.movbc):
-                # 이미 먹힌 치즈는 스킵
-                if movbc_pos == [-1, -1]:
-                    continue
-
-                # 랜덤 방향 선택 (최대 100회 시도)
-                attempts = 0
-                found = False
-                while attempts < 100:  # exe3.py: MAX_ATTEMPTS = 100
-                    attempts += 1
-                    new_direction = random.randrange(0, 4)
-                    if self._movable(movbc_pos, new_direction):
-                        self.movbc_last_pos[i] = movbc_pos.copy()
-                        self.movbc[i] = self._move(movbc_pos, new_direction)
-                        self.movbc_direction[i] = new_direction
-                        found = True
-                        break
-                # 실패 시: 제자리 유지 (exe3.py도 이동 불가면 제자리)
-                if not found:
-                    pass
-
-            # ========================================
-            # 치즈 수집 (+ Crossing 감지)
-            # ========================================
-            mx, my = self.mouse
-            if 0 <= mx < 11 and 0 <= my < 11:
-                # 작은 치즈
-                if self.sc[mx][my]:
-                    self.sc[mx][my] = 0
-                    self.score += 10
-                    self.collision_score += 10
-
-                # movbc 수집 (+ Crossing 감지)
-                eat_movbc = []
-                for i, mbc in enumerate(self.movbc):
-                    if mbc == [-1, -1]:
-                        continue
-                    # 직접 충돌
-                    if mbc == [mx, my]:
-                        eat_movbc.append(i)
-                        self.score += 500
-                        self.collision_score += 500
-                    # ✅ Crossing 감지 (exe3.py:2702)
-                    elif (mbc == self.mouse_last_pos and
-                          [mx, my] == self.movbc_last_pos[i]):
-                        eat_movbc.append(i)
-                        self.score += 500
-                        self.collision_score += 500
-                for i in sorted(set(eat_movbc), reverse=True):
-                    self.movbc[i] = [-1, -1]
-
-                # crzbc 수집 (+ Crossing 감지)
-                eat_crzbc = []
-                for i, bc in enumerate(self.crzbc):
-                    if bc == [-1, -1]:
-                        continue
-                    # 직접 충돌
-                    if bc == [mx, my]:
-                        eat_crzbc.append(i)
-                        self.score += 500
-                        self.collision_score += 500
-                    # ✅ Crossing 감지 (exe3.py:2736)
-                    elif (bc == self.mouse_last_pos and
-                          [mx, my] == self.crzbc_last_pos[i]):
-                        eat_crzbc.append(i)
-                        self.score += 500
-                        self.collision_score += 500
-                for i in sorted(set(eat_crzbc), reverse=True):
-                    self.crzbc[i] = [-1, -1]
-
-            # 스텝 제한 체크
-            if self.step >= self.step_limit and self.step_limit > 0:
+            # 10. Win/lose check (exe3.py order: life→sc→step)
+            if self.life == 0:
+                self.lose_sign = True
+                break
+            elif sum([sum(line) for line in self.sc]) == 0:
+                self.win_sign = True
+                win_bonus = self.run * 10 + self.step
+                self.score += int(win_bonus)
+                break
+            elif self.step >= self.step_limit and self.step_limit > 0:
                 self.lose_sign = True
                 break
 
-        # ✅ 누적 점수 업데이트 (exe3.py와 동일)
+            # 11. Catched: respawn and break (exe3.py: retry_after_catched then break)
+            if self.catched:
+                self._retry_after_catched()
+                break
+
+        # Update cumulative scores
         self.total_command_score += self.command_score
         self.total_collision_score += self.collision_score
-
-        # ✅ 승리 조건: 모든 작은 치즈 먹음
-        if sum([sum(line) for line in self.sc]) == 0:
-            self.win_sign = True
-            victory_bonus = self.run * 10 + self.step
-            self.score += int(victory_bonus)
 
         return float(self.score)
 
